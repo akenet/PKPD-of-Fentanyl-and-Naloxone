@@ -1,0 +1,293 @@
+---
+title: "Fentanyl and Naloxone Simulations"
+# author: "Adam Kenet"
+# date: "May 2021"
+output:
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+runtime: shiny
+resource_files:
+- interactive_missed_dose.m
+- interactive_survival.m
+- alas_vefkn_main.m
+- alas_vefkn_eqns.m
+- alas_vefkn_survive.m
+- alas_vefkn_missed.m
+---
+
+
+```{r}
+# Systems Pharmacology and Personalized Medicine
+# Amy van Ee, Lydia Fozo, Adam Kenet, Shiker Nair
+# May 2021
+# Final Project
+
+
+# Interactive Visualization
+```
+
+
+```{r setup, echo=FALSE, message=FALSE, include=FALSE, warning=FALSE}
+library(flexdashboard)
+library(tidyverse)
+library(dplyr)
+library(plotly)
+library(shiny)
+library(R.matlab)
+library(patchwork)
+```
+
+```{r echo=FALSE, message=FALSE, include=FALSE, warning=FALSE}
+# connect R to MATLAB
+library(matlabr)
+
+# Plot theme
+my_theme <- theme_classic() + 
+  theme(text = element_text(size = 12),
+        plot.title = element_text(hjust = 0.5),
+        axis.title.x = element_text(margin = margin(10,0,0,0)),
+        axis.title.y = element_text(margin = margin(0,10,0,0)),
+        axis.text.x = element_text(margin = margin(5,0,0,0)),
+        axis.text.y = element_text(margin = margin(0,5,0,0)))
+
+```
+
+
+Survival {data-icon="ion-podium"}
+===================================== 
+
+Inputs {.sidebar data-width=350}
+-----------------------------------------------------------------------
+
+```{r}
+hr()
+h3('Survival')
+hr()
+
+radioButtons(inputId="dose_n", label = "Naloxone Dose (mg):",
+            choices = list("2 mg" = 2,
+                           "4 mg" = 4),
+            selected = 2)
+
+sliderInput(inputId="delay", label = "Minutes Before First Naloxone Administration:",
+            min = 1,
+            max = 10,
+            value = 5)
+
+sliderInput(inputId="time_n", label = "Minutes Between Naloxone Administrations:",
+            min = 1,
+            max = 5,
+            value = 2)
+
+
+sliderInput(inputId="num_n", label = "Number of Naloxone Administrations:",
+            min = 1,
+            max = 4,
+            value = 2)
+
+actionButton("run_survival", label = "Run Simulation")
+h5('Note: Please be patient while the simulation is running. It should take ~15-20 seconds for your figure to appear/update.')
+```
+
+
+Column {data-width=750}
+-----------------------------------------------------------------------
+
+```{r}
+
+observeEvent(input$run_survival, {
+  
+  code <-paste0('interactive_survival(',input$dose_n, ",", input$delay, ",", input$time_n, ",", input$num_n,")")
+  
+  run_matlab_code(code)
+  
+})
+```
+
+```{r}
+# Survival
+p1 <- eventReactive(input$run_survival, {
+  # base case
+  Tbase <- as.data.frame(readMat('int_T_(survival_base).mat'))
+  Ybase <- as.data.frame(readMat('int_Y_(survival_base).mat'))
+  s_base <- cbind(Tbase, Ybase)
+  
+  T1 <- as.data.frame(readMat('int_T_(survival_run).mat'))
+  Y1 <- as.data.frame(readMat('int_Y_(survival_run).mat'))
+  s_run <- cbind(T1, Y1)
+  
+  # Change column names to be more informative
+  cols <- c('Time', 'Free_Fentanyl_Blood', 'Free_Fentanyl_Body', 'Free_Fentanyl_Brain',
+            'Free_Naloxone_Blood', 'Free_Naloxone_Body', 'Free_Naloxone_Brain',
+            'Free_mOR_Blood', 'mOR_Fentanyl_Brain', 'mOR_Naloxone_Brain',
+            'Cleared_Fentanyl', 'Cleared_Naloxone')
+  
+  names(s_run) <- cols
+  names(s_base) <- cols
+  
+  # add mOR receptor occupancy
+  mOR_conc <- 7.9365
+  s_run <- mutate(s_run, Fentanyl_Receptor_Occupancy = mOR_Fentanyl_Brain/mOR_conc)
+  s_base <- mutate(s_base, Fentanyl_Receptor_Occupancy = mOR_Fentanyl_Brain/mOR_conc)
+  
+  # create plot
+  cols <- c('No Naloxone'='#00bfc4','Simulation'='#f8766d')
+  survivePlot <- ggplot(NULL, aes(x = Time, y = Fentanyl_Receptor_Occupancy)) +
+    geom_line(data = s_run, aes(color='Simulation'), size = 1) +
+    geom_line(data = s_base, aes(color='No Naloxone'), linetype = "dashed") +
+    xlab('Time (min)') +
+    ylab('Fraction of \u03BCOR Bound to Fentanyl') +
+    scale_colour_manual(values=cols) +
+    labs(title = 'PD of Fentanyl and Naloxone', color = "Legend") +
+    ylim(0,1) +
+    xlim(0,30) + 
+    my_theme
+  
+  
+  # make interactive
+  plotly_build(survivePlot)
+})
+
+renderPlotly({
+  p1()
+})
+```
+
+This simulation shows the fraction of the µ Opioid Receptors that are bound to fentanyl. At time = 0, a dose of 2 mg of fentanyl was given. The dashed green line represents the scenario when no naloxone is administered. The solid red line shows the effect of giving naloxone to a patient.
+
+
+
+Missed Dose {data-icon="ion-podium"}
+===================================== 
+
+Inputs {.sidebar data-width=350}
+-----------------------------------------------------------------------
+
+```{r}
+hr()
+h3('Missed Dose')
+h5('Note: Each fentanyl dose is 4 mg and administered 30 minutes apart.')
+hr()
+
+sliderInput(inputId="missed_dose", label = "Which Fentayl Dose Was Missed:",
+            min = 1,
+            max = 6,
+            value = 2)
+
+sliderInput(inputId="late", label = "Minutes Before the Missed Dose Was Retaken:",
+            min = 0,
+            max = 29,
+            value = 26)
+
+actionButton("run_missed_dose", label = "Run Simulation")
+h5('Note: Please be patient while the simulation is running. It should take ~15-20 seconds for your figure to appear/update.')
+```
+
+Column {data-width=750}
+-----------------------------------------------------------------------
+
+
+```{r}
+observeEvent(input$run_missed_dose, {
+  
+  code <-paste0('interactive_missed_dose(',input$missed_dose, ",", input$late, ")")
+  
+  run_matlab_code(code)
+  
+})
+```
+
+
+```{r}
+p2 <- eventReactive(input$run_missed_dose, {
+  # base case
+  Tbase <- as.data.frame(readMat('int_T_(missed_dose_base).mat'))
+  Ybase <- as.data.frame(readMat('int_Y_(missed_dose_base).mat'))
+  md_base <- cbind(Tbase, Ybase)
+  
+  T1 <- as.data.frame(readMat('int_T_(missed_dose_run).mat'))
+  Y1 <- as.data.frame(readMat('int_Y_(missed_dose_run).mat'))
+  md_run <- cbind(T1, Y1)
+  
+  # Change column names to be more informative
+  cols <- c('Time', 'Free_Fentanyl_Blood', 'Free_Fentanyl_Body', 'Free_Fentanyl_Brain',
+            'Free_Naloxone_Blood', 'Free_Naloxone_Body', 'Free_Naloxone_Brain',
+            'Free_mOR_Blood', 'mOR_Fentanyl_Brain', 'mOR_Naloxone_Brain',
+            'Cleared_Fentanyl', 'Cleared_Naloxone')
+  
+  names(md_run) <- cols
+  names(md_base) <- cols
+  
+  # create plot
+  cols <- c('Normal'='#00bfc4','Missed Dose'='#f8766d')
+  concPlot <- ggplot(data = NULL, aes(x = Time, y = Free_Fentanyl_Blood)) +
+    geom_line(data = md_run, aes(color='Missed Dose'), size = 1) +
+    geom_line(data = md_base, aes(color='Normal'), linetype = "dashed") +
+    xlab('Time (min)') +
+    ylab('[Fentanyl] (nM)') +
+    scale_colour_manual(values=cols) +
+    labs(title = 'Concentration of Fentanyl in Blood', color = 'Legend') +
+    my_theme
+  
+  # make interactive
+  plotly_build(concPlot)
+})
+
+renderPlotly({
+  p2()
+})
+```
+
+The above graph shows how the concentration of fentanyl is affected by missing one dose and taking it at a later time. The dashed green line represents the normal scenario when all doses are taken on schedule. The solid red line shows the impact of missing a dose.
+
+
+```{r}
+p3 <- eventReactive(input$run_missed_dose, {
+  # base case
+  Tbase <- as.data.frame(readMat('int_T_(missed_dose_base).mat'))
+  Ybase <- as.data.frame(readMat('int_Y_(missed_dose_base).mat'))
+  s_base <- cbind(Tbase, Ybase)
+  
+  T1 <- as.data.frame(readMat('int_T_(missed_dose_run).mat'))
+  Y1 <- as.data.frame(readMat('int_Y_(missed_dose_run).mat'))
+  s_run <- cbind(T1, Y1)
+  
+  # Change column names to be more informative
+  cols <- c('Time', 'Free_Fentanyl_Blood', 'Free_Fentanyl_Body', 'Free_Fentanyl_Brain',
+            'Free_Naloxone_Blood', 'Free_Naloxone_Body', 'Free_Naloxone_Brain',
+            'Free_mOR_Blood', 'mOR_Fentanyl_Brain', 'mOR_Naloxone_Brain',
+            'Cleared_Fentanyl', 'Cleared_Naloxone')
+  
+  names(s_run) <- cols
+  names(s_base) <- cols
+  
+  # add mOR receptor occupancy
+  mOR_conc <- 7.9365
+  s_run <- mutate(s_run, Fentanyl_Receptor_Occupancy = mOR_Fentanyl_Brain/mOR_conc)
+  s_base <- mutate(s_base, Fentanyl_Receptor_Occupancy = mOR_Fentanyl_Brain/mOR_conc)
+  
+  # create plot
+  cols <- c('Normal'='#00bfc4','Missed Dose'='#f8766d')
+  md_survivePlot <- ggplot(NULL, aes(x = Time, y = Fentanyl_Receptor_Occupancy)) +
+    geom_line(data = s_run, aes(color='Missed Dose'), size = 1) +
+    geom_line(data = s_base, aes(color='Normal'), linetype = "dashed") +
+    xlab('Time (min)') +
+    ylab('Fraction of \u03BCOR Bound to Fentanyl') +
+    scale_colour_manual(values=cols) +
+    labs(title = 'PD of Fentanyl', color = "Legend") +
+    ylim(0,1) +
+    xlim(0,180) + 
+    my_theme
+  
+  
+  # make interactive
+  plotly_build(md_survivePlot)
+})
+
+renderPlotly({
+  p3()
+})
+```
+
+This simulation shows the fraction of the µ Opioid Receptors that are bound to fentanyl. The dashed green line represents the normal scenario when all doses are taken on schedule. The solid red line shows the impact of missing a dose.
